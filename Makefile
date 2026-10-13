@@ -3,14 +3,20 @@ FRONTEND_PORT ?= 3300
 PYTHON := .venv/bin/python
 API_BASE := http://127.0.0.1:$(BACKEND_PORT)
 
-.PHONY: up
+.PHONY: up build
 
 SHELL := /bin/bash
 
-# 前台同时启动后端和前端开发服务，Ctrl-C 会一起停止。
+# 构建前端生产包。NEXT_PUBLIC_API_BASE 会在构建时写入页面。
+build:
+	@test -d frontend/node_modules || { echo "缺少 frontend/node_modules，请先在 frontend 目录执行 npm install"; exit 1; }
+	cd frontend && NEXT_PUBLIC_API_BASE="$(API_BASE)" npm run build
+
+# 前台同时启动后端和已构建的前端，Ctrl-C 会一起停止。
 up:
 	@test -x "$(PYTHON)" || { echo "缺少 .venv，请先创建虚拟环境并安装依赖"; exit 1; }
 	@test -d frontend/node_modules || { echo "缺少 frontend/node_modules，请先在 frontend 目录执行 npm install"; exit 1; }
+	@test -f frontend/.next/BUILD_ID || { echo "缺少前端构建，请先执行 make build"; exit 1; }
 	@if lsof -nP -iTCP:$(BACKEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then echo "后端端口 $(BACKEND_PORT) 已被占用"; exit 1; fi
 	@if lsof -nP -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN >/dev/null 2>&1; then echo "前端端口 $(FRONTEND_PORT) 已被占用"; exit 1; fi
 	@echo "后端 http://127.0.0.1:$(BACKEND_PORT)    前端 http://127.0.0.1:$(FRONTEND_PORT)"
@@ -31,7 +37,6 @@ up:
 	NOVEL_GENERATOR_FRONTEND_PORT="$(FRONTEND_PORT)" \
 	"$(PYTHON)" main.py & \
 	backend_pid=$$!; \
-	NEXT_PUBLIC_API_BASE="$(API_BASE)" \
-	npm --prefix frontend run dev -- --hostname 127.0.0.1 --port "$(FRONTEND_PORT)" & \
+	(cd frontend && NEXT_PUBLIC_API_BASE="$(API_BASE)" npm run start -- --hostname 127.0.0.1 --port "$(FRONTEND_PORT)") & \
 	frontend_pid=$$!; \
 	wait
