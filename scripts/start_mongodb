@@ -1,0 +1,66 @@
+#!/bin/bash
+
+MONGO_CTN_NAME=novel-generator-mongodb
+MONGO_REPL=rs0
+COMPOSE_FILE=compose.mongodb.yaml
+
+# Enable for gitlab-ci
+if [ "$CI" != "" ]; then
+  exit
+fi
+
+docker info >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+  echo "please run docker daemon first"
+  exit 1
+fi
+
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+
+CHECK=$(docker ps -f name=$MONGO_CTN_NAME -q 2>/dev/null)
+if [ "$CHECK" == "" ]; then
+  docker compose -f "$ROOT_DIR/$COMPOSE_FILE" up -d >/dev/null || exit 1
+fi
+
+for ((attempt=0; attempt<30; attempt++)); do
+  if docker exec "$MONGO_CTN_NAME" mongosh --quiet --eval 'quit(db.runCommand({ ping: 1 }).ok ? 0 : 1)' >/dev/null 2>&1; then
+    break
+  fi
+  if [ "$attempt" -eq 29 ]; then
+    echo "MongoDB did not become ready"
+    exit 1
+  fi
+  sleep 1
+done
+
+docker exec "$MONGO_CTN_NAME" mongosh --quiet --eval "
+const hello = db.hello();
+if (hello.setName) {
+  quit(0);
+}
+try {
+  const result = rs.initiate({
+    _id: '${MONGO_REPL}',
+    members: [{ _id: 0, host: 'localhost:27017' }]
+  });
+  if (!result.ok) {
+    print(result.errmsg || JSON.stringify(result));
+    quit(1);
+  }
+} catch (e) {
+  if (!/already initialized/i.test(String(e))) {
+    print(e);
+    quit(1);
+  }
+}
+" || exit 1
+
+for ((attempt=0; attempt<30; attempt++)); do
+  if docker exec "$MONGO_CTN_NAME" mongosh --quiet --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1; then
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "MongoDB replica set did not become writable"
+exit 1
